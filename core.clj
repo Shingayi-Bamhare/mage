@@ -5,6 +5,30 @@
            [System.Reflection TypeAttributes MethodAttributes MethodImplAttributes FieldAttributes]
            [System.Runtime.InteropServices CharSet]))
 
+(defn token-in-context
+  [{:keys [::labels ::locals ::fields]} token]
+  (clojure.core/or
+    (labels token)
+    (fields token)
+    (locals token)))
+
+;; TODO resolve copy+paste, simplify
+(defn ensure-in-context
+  [{:keys [::ilg ::type-builder ::labels ::locals ::fields] :as context} token]
+  (if (token-in-context context token)
+    context
+    (cond
+      (::label token) (assoc-in context [::labels token] (.DefineLabel ilg))
+      
+      (::field token) (assoc-in context [::fields token] (.DefineField type-builder
+                                                                       (str (::field token))
+                                                                       (::type token)
+                                                                       (::attributes token)))
+      
+      (::local token)  (let [^LocalBuilder local (.DeclareLocal ilg (::type token))]
+                         (if-let [name (::name token)] (.SetLocalSymInfo local name))
+                         (assoc-in context [::locals token] local)))))
+
 (defmulti emit-data
   "Emit bytecode for symbolic data object m. Internal."
   (fn [context m]
@@ -23,6 +47,13 @@
   (cond 
     (nil? argument)     (do (.Emit ilg opcode)
                           context)
+    
+    (coll? argument)    (let [ctx (reduce (fn [ctx token] (ensure-in-context ctx token))
+                                          context argument)]
+                          (do
+                            (.Emit ilg opcode
+                                   (into-array (map #(token-in-context ctx %) argument)))
+                            ctx))
     
     (labels argument)  (do (.Emit ilg opcode (labels argument))
                          context)
